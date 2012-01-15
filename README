@@ -1,0 +1,9 @@
+Description
+-----------
+This project is just a Perl script that searches for images with a certain 
+naming convention and ensures the EXIF tag DateTimeOriginal is correct.  It
+exists because my cell phone tags this incorrectly and I needed a project to
+practice using git and github.
+
+AUTHOR  Quincy Bowers   https://github.com/quincy
+
