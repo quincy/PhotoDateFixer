@@ -2,11 +2,11 @@
 
 use strict;
 use warnings;
+use Carp;
 use Cwd;
 use File::Basename;
 use File::Copy;
-
-use lib q{C:/lib};
+use Time::localtime;
 use Image::ExifTool ':Public';
 use Getopt::Long qw{HelpMessage};
 use Log::Message::Simple qw{:STD :CARP};
@@ -16,10 +16,11 @@ use Pod::Usage;
 #-------------------------------------------------------------------------------
 # CONSTANTS
 #-------------------------------------------------------------------------------
-my $EMPTY_STR = q{};
-my $re_image_suffixes = qr{\.(?:jpg|jpeg)$}xmsi;
-my ($g_sec,$g_min,$g_hour,$g_mday,$g_mon,$g_year,$g_wday,$g_yday,$g_isdst) = localtime(time);
-my $YEAR = $g_year + 1900;
+my $EMPTY_STRING       = q{};
+my $re_image_suffixes  = qr{(?:jpg|jpeg)$}xmsi;
+my $re_dated_file_name = qr{\d\d-\d\d-\d\d_\d\d\d\d\.$re_image_suffixes};
+my $curr_year          = localtime->year() + 1900;
+
 
 #-------------------------------------------------------------------------------
 # GLOBALS
@@ -37,14 +38,14 @@ my $opt = process_command_line();
 #-------------------------------------------------------------------------------
 # Start recursive search for images ending in .jpg
 #-------------------------------------------------------------------------------
-my @dirs  = ();
-my @files = ();
-push @dirs, $start_dir;
+my @dirs = ($opt->{directory});
 
 while (@dirs)
 {
     my $dir = shift @dirs;
-    opendir my $DIR, $dir or die "Unable to open $dir/ for reading.  $!\n";
+    opendir my $DIR, $dir
+        or carp "Unable to open [$dir] for reading.  $!\n";
+    next  unless $DIR;
 
     ENTRY:
     while (my $entry = readdir $DIR)
@@ -53,16 +54,15 @@ while (@dirs)
 
         my $path = "$dir/$entry";
 
-        if (-d $path && $opt_recurse)
+        if (-d $path && $opt->{recurse})
         {
             _debug("Adding $path to dirs.\n");
             push @dirs, $path;
         }
-        elsif ($entry =~ m{$re_image_suffixes}xmsi
-            && $entry =~ m{\d\d-\d\d-\d\d_\d\d\d\d}xms)
+        elsif ($entry =~ m{$re_dated_file_name}xmsi)
         {
             _debug("Adding $path to files.\n");
-            push @files, $path;
+            process_image_file($path);
         }
         else
         {
@@ -73,52 +73,6 @@ while (@dirs)
     closedir $DIR;
 }
 
-print "Found " . scalar(@files) . " images.\n";
-
-
-#-------------------------------------------------------------------------------
-# Now, examine the EXIF data for each file to see if the date tag is there.
-#-------------------------------------------------------------------------------
-foreach my $file (@files)
-{
-    my ($file_name, $file_dir, $suffix)     = fileparse($file);
-    my ($file_date, $file_time)             = split /_/, $file_name;
-    my ($file_month, $file_day, $file_year) = split /-/, $file_date;
-
-    $file_date = format_date($file_year, $file_month, $file_day);
-
-    my $info = ImageInfo($file);
-
-    print win_path($file) . "\n";
-
-    # DateTimeOriginal exists -- check if it matches the file name.
-    if (exists $info->{DateTimeOriginal})
-    {
-        my ($exif_date, $exif_time) = split /\s+/, $info->{DateTimeOriginal};
-        my ($exif_year, $exif_month, $exif_day) = split /:/, $exif_date;
-
-        $exif_date = format_date($exif_year, $exif_month, $exif_day);
-
-        if ($file_date eq $exif_date)
-        {
-            print "\tDateTimeOriginal : $info->{DateTimeOriginal}\n";
-            print "\tThe date in the file name is equal to the date in the exif data.\n";
-            ++$unchanged;
-        }
-        else
-        {
-            update_date_tag($info, $file, $file_year, $file_month, $file_day, $file_time);
-        }
-    }
-    # DateTimeOriginal does not exist -- it will be set to the value of the file
-    # name.
-    else
-    {
-        print "\tDateTimeOriginal tag was not found.\n";
-
-        update_date_tag($info, $file, $file_year, $file_month, $file_day, $file_time);
-    }
-}
 
 print "\n";
 printf "Files with EXIF data updated: %5d\n", $exif_updated;
@@ -132,101 +86,130 @@ exit 0;
 #-------------------------------------------------------------------------------
 
 #-------------------------------------------------------------------------------
+# Examine the EXIF data in $file to see if the date tag is there.
+#-------------------------------------------------------------------------------
+sub process_image_file
+{
+    my ($file) = @_;
+
+    my ($file_name, $file_dir, $suffix)     = fileparse($file);
+    my ($file_date, $file_time)             = split /_/, $file_name;
+    my ($file_month, $file_day, $file_year) = split /-/, $file_date;
+
+    $file_date = exif_date($file_year, $file_month, $file_day);
+    $file_time = substr($file_time, 0, 2)
+               . ':'
+               . substr($file_time, 2, 2)
+               . ':00';
+
+    my $tags = ImageInfo($file);
+
+    print "$file\n";
+
+    # DateTimeOriginal exists -- check if it matches the file name.
+    if (exists $tags->{DateTimeOriginal})
+    {
+        my ($exif_date, $exif_time) = split /\s+/, $tags->{DateTimeOriginal};
+
+        if ($file_date eq $exif_date)
+        {
+            print "\tDateTimeOriginal : $tags->{DateTimeOriginal}\n";
+            print "\tThe date in the file name is equal to the date in the exif data.\n";
+            ++$unchanged;
+        }
+        else
+        {
+            update_date_tag($file, "$file_date $file_time");
+        }
+    }
+    # DateTimeOriginal does not exist -- it will be set to the value of the file
+    # name.
+    else
+    {
+        print "\tDateTimeOriginal tag was not found.\n";
+        update_date_tag($file, "$file_date $file_time");
+    }
+}
+
+#-------------------------------------------------------------------------------
 # Sets the DateTimeOriginal EXIF tag to be equal to the date in the file name.
 #-------------------------------------------------------------------------------
 sub update_date_tag
 {
-    my ($info, $file, $year, $month, $day, $time) = @_;
+    my ($file, $datetime) = @_;
 
-    my $exif_date = format_exif_date($year, $month, $day);
-    my $exif_time = substr($time, 0, 2) 
-                  . ':' 
-                  . substr($time, 2, 2) 
-                  . ':00';
-
-    print "\tDateTimeOriginal tag will be updated to [$exif_date $exif_time].\n";
+    print "\tDateTimeOriginal tag will be updated to [$datetime].\n";
     print "\tContinue? [y/n] ";
 
-    if ($opt_dry_run)
+    if ($opt->{'dry-run'})
     {
         print "y\n";
         ++$exif_updated;
+        return;
     }
-    else
+
+    my $answer = $opt->{interactive} ? lc <STDIN> : 'y';
+    chomp $answer;
+
+    if ($answer eq 'y')
     {
-        my $answer = 'n';
+        my $exifTool = new Image::ExifTool;
+        my ($success, $error) = $exifTool->SetNewValue(DateTimeOriginal => "$datetime");
 
-        if ($opt_interactive)
+        if ($success)
         {
-            $answer = <STDIN>;
-            $answer = lc $answer;
-            chomp $answer;
-        }
-        else
-        {
-            print "y\n";
-            $answer = 'y';
-        }
-
-        if ($answer eq 'y')
-        {
-            my $exifTool = new Image::ExifTool;
-            my ($success, $error) = $exifTool->SetNewValue(DateTimeOriginal => "$exif_date $exif_time");
-
-            if ($success)
+            if (!$exifTool->WriteInfo($file))
             {
-                if (!$exifTool->WriteInfo($file))
-                {
-                    die "Error writing file!  " . $exifTool->GetValue('Error') . "\n";
-                }
-                else
-                {
-                    ++$exif_updated;
-                    print "\tData has been written.\n";
-                }
+                die "Error writing file!  " . $exifTool->GetValue('Error') . "\n";
             }
             else
             {
-                die "Error setting tag value!  $error\n";
+                ++$exif_updated;
+                print "\tData has been written.\n";
             }
         }
         else
         {
-            print "\tFile will not be modified.\n";
-            ++$unchanged;
+            die "Error setting tag value!  $error\n";
         }
     }
-}
-
-
-#-------------------------------------------------------------------------------
-# Returns a date string in the format YYYY-MM-DD.
-#-------------------------------------------------------------------------------
-sub format_date
-{
-    my ($year, $month, $date) = @_;
-
-    if ($year =~ m/^\d{2}$/xms)
+    else
     {
-        $year += ($year+2000 <= $YEAR) ? 2000 : 1900;
+        print "\tFile will not be modified.\n";
+        ++$unchanged;
     }
-
-    my $new_date = qq{$year-$month-$date};
-
-    return $new_date;
 }
 
 
 #-------------------------------------------------------------------------------
 # Returns a date string in the format YYYY:MM:DD.
 #-------------------------------------------------------------------------------
-sub format_exif_date
+sub exif_date
 {
-    my ($year, $month, $date) = @_;
+    my ($date) = @_;
+    my ($day, $month, $year);
 
-    if ($year =~ m/^\d{2}$/xms)
+    if ($date =~ m{^(\d\d)[-:/](\d\d)[-:/](\d\d\d\d)$}xms)
     {
-        $year += ($year+2000 <= $YEAR) ? 2000 : 1900;
+        $month = $1;
+        $day   = $2;
+        $year  = $3;
+    }
+    elsif ($date =~ m{^(\d\d\d\d)[-:/](\d\d)[-:/](\d\d)$}xms)
+    {
+        $year  = $1;
+        $month = $2;
+        $day   = $3;
+    }
+    elsif ($date =~ m{^(\d\d)[-:/](\d\d)[-:/](\d\d)$}xms)
+    {
+        $month = $1;
+        $day   = $2;
+        $year  = ($3 + 2000 <= $curr_year) ? $3 + 2000 : $3 + 1900;
+    }
+    else
+    {
+        croak "Unable to parse date [$date].\n";
     }
 
     my $new_date = qq{$year:$month:$date};
