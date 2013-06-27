@@ -8,6 +8,10 @@ use File::Copy;
 
 use lib q{C:/lib};
 use Image::ExifTool ':Public';
+use Getopt::Long qw{HelpMessage};
+use Log::Message::Simple qw{:STD :CARP};
+use Pod::Usage;
+
 
 #-------------------------------------------------------------------------------
 # CONSTANTS
@@ -20,63 +24,15 @@ my $YEAR = $g_year + 1900;
 #-------------------------------------------------------------------------------
 # GLOBALS
 #-------------------------------------------------------------------------------
-my $opt_debug       = 0;
-my $opt_recurse     = 1;
-my $opt_dry_run     = 0;
-my $opt_interactive = 0;
-my $start_dir       = $EMPTY_STR;
 my $unchanged       = 0;
 my $exif_updated    = 0;
 
 
-# Parse command line arguments.
-foreach my $arg (@ARGV)
-{
-    if ($arg eq '-debug')
-    {
-        $opt_debug = 1;
-    }
-    elsif ($arg eq '--no-recurse')
-    {
-        $opt_recurse = 0;
-    }
-    elsif ($arg =~ m{^--?h(?:elp)?}xms)
-    {
-        while (<DATA>)
-        {
-            print;
-        }
-        exit 0;
-    }
-    elsif ($arg eq '--interactive' || $arg eq '-i')
-    {
-        $opt_interactive = 1;
-    }
-    elsif ($arg eq '--dry-run')
-    {
-        $opt_dry_run = 1;
-    }
-    else
-    {
-        $start_dir = $arg;
-        $start_dir =~ tr!\\!/!;
-    }
-}
+#-------------------------------------------------------------------------------
+# Process command line
+#-------------------------------------------------------------------------------
+my $opt = process_command_line();
 
-$start_dir = getcwd()  if !$start_dir;
-
-_debug("Start dir is " . win_path($start_dir) . ".\n");
-
-if (! -e $start_dir)
-{
-    print "The specified start directory does not exist!\n";
-    exit 1;
-}
-if (! -d $start_dir)
-{
-    print "The specified start directory is not a directory!\n";
-    exit 1;
-}
 
 #-------------------------------------------------------------------------------
 # Start recursive search for images ending in .jpg
@@ -280,50 +236,146 @@ sub format_exif_date
 
 
 #-------------------------------------------------------------------------------
-# Transforms Perl's internal Win32 paths into real Win32 paths.
-#-------------------------------------------------------------------------------
-sub win_path
-{
-    my $path = shift @_;
-    $path    =~ tr!/!\\!;
-
-    return $path;
-}
-
-#-------------------------------------------------------------------------------
 # Prints debug messages.
 #-------------------------------------------------------------------------------
 sub _debug
 {
-    if ($opt_debug)
+    if ($opt->{debug})
     {
         print "DEBUG :: $_[0]";
     }
 }
 
 
+#-------------------------------------------------------------------------------
+# Parse the command line and return a hash ref of the configuration options.
+#-------------------------------------------------------------------------------
+sub process_command_line
+{
+    my %options = (
+        'help'        => 0,
+        'man'         => 0,
+        'usage'       => 0,
+        'recurse'     => 1,
+        'dry-run'     => 0,
+        'interactive' => 0,
+        'debug'       => 0,
+        'verbose'     => 1,
+        'directory'   => getcwd(),
+    );
+
+    GetOptions(
+        'help'        => \$options{help},
+        'man'         => \$options{man},
+        'usage'       => \$options{usage},
+        'debug!'      => \$options{debug},
+        'verbose!'    => \$options{verbose},
+        'recurse'     => \$options{recurse},
+        'dry-run'     => \$options{'dry-run'},
+        'interactive' => \$options{interactive},
+        'directory=s' => \$options{directory},
+    );
+
+    pod2usage(-exitstatus => 0, -verbose => 0)  if $options{usage};
+    pod2usage(-exitstatus => 0, -verbose => 1)  if $options{help};
+    pod2usage(-exitstatus => 0, -verbose => 2)  if $options{man};
+
+    if ($options{help} || $options{man} || $options{usage})
+    {
+        exit 0;
+    }
+
+    if (! -e $options{directory})
+    {
+        print "The specified start directory [$options{directory}] does not exist!\n";
+        exit 1;
+    }
+    if (! -d $options{directory})
+    {
+        print "The specified start directory [$options{directory}] is not a directory!\n";
+        exit 1;
+    }
+    _debug("Start dir is [$options{directory}].\n");
+
+    return \%options;
+}
+
+
 __END__
-PhotoDateFixer Help Screen
+=head1 PhotoDateFixer.pl
+
+SCM: git@github.com:quincy/PhotoDateFixer.git
+
+=head1 USAGE
+
+$ PhotoDateFixer [options] {--directory=some_dir}
+
+ Options:
+    --help          Shows the full help screen.
+    --man           Print the full man page documentation.
+    --usage         Shows a brief usage message.
+    --recurse       Search for photos recursively which is the default.  Use --norecurse to turn off.
+    --dry-run       Show what would happen if the program were run.
+    --interactive   Prompt for destructive actions.  Defaults to non-interactive mode.
+    --debug         Print debugging messages.
+    --verbose       Print verbose messages.
+    --directory     The directory in which to begin the search.
+
+=head1 OPTIONS
+
+Options name can be abbreviated as long as they are unique.  You can combine options use the GNU short option style.
+
+=over 4
+
+=item B<--help>
+
+Shows this screen.
+
+=item B<--man>
+
+Print the full man page documentation.
+
+=item B<--usage>
+
+Print a brief usage message.
+
+=item B<--recurse>
+
+Recursively search for images.  This is the default.  Turn off with --norecurse.
+
+=item B<--dry-run>
+
+Only show what would have happened.  Don't actually do anything destructive.
+
+=item B<--interactive>
+
+The program will prompt before any destructuve actions.  Defaults to non-interactive.
+
+=item B<--debug>
+
+Turn on debugging messages.
+
+=item B<--verbose>
+
+Turn on verbose messages.
+
+=item B<--directory>
+
+Specifies the directory where the search should begin.
+
+=back
+
+=head1 DESCRIPTION
 
 Searches recursively for images that are missing EXIF date tags or that have
 file names that look like a date but with EXIF data that doesn't match that.
 
-The images that are identified can then have their EXIF data updated to the 
+The images that are identified can then have their EXIF data updated to the
 correct values.
 
-USAGE
+=head1 AUTHOR
 
-$ PhotoDateFixer [-h] [-debug] [directory]
+Quincy Bowers B<qbowers@clearwateranalytics.com>
 
--h              Show this message.
-
--debug          Show debugging information.
-
---no-recurse    Don't search directories recursively.
-
---dry-run       Prints the results of what would happen if you answered yes to 
-                all questions.  No changes to any file is actually made.
-
-directory       You can specify the directory to start the search from.  If this 
-                is not specified the current directory is assumed.
+=cut
 
