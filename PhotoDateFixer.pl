@@ -139,7 +139,7 @@ sub update_date_tag
     my ($file, $datetime) = @_;
 
     print "\tDateTimeOriginal tag will be updated to [$datetime].\n";
-    print "\tContinue? [y/n] ";
+    print "\tContinue? (y/n) [y] ";
 
     if ($opt->{'dry-run'})
     {
@@ -150,6 +150,7 @@ sub update_date_tag
 
     my $answer = $opt->{interactive} ? lc <STDIN> : 'y';
     chomp $answer;
+    $answer = $answer eq $EMPTY_STRING ? 'y' : $answer;
 
     if ($answer eq 'y')
     {
@@ -186,35 +187,11 @@ sub update_date_tag
 #-------------------------------------------------------------------------------
 sub exif_date
 {
-    my ($date) = @_;
-    my ($day, $month, $year);
+    my ($year, $month, $day) = @_;
+    $year = ($year + 2000) > $curr_year ? $year + 1900
+                                        : $year + 2000;
 
-    if ($date =~ m{^(\d\d)[-:/](\d\d)[-:/](\d\d\d\d)$}xms)
-    {
-        $month = $1;
-        $day   = $2;
-        $year  = $3;
-    }
-    elsif ($date =~ m{^(\d\d\d\d)[-:/](\d\d)[-:/](\d\d)$}xms)
-    {
-        $year  = $1;
-        $month = $2;
-        $day   = $3;
-    }
-    elsif ($date =~ m{^(\d\d)[-:/](\d\d)[-:/](\d\d)$}xms)
-    {
-        $month = $1;
-        $day   = $2;
-        $year  = ($3 + 2000 <= $curr_year) ? $3 + 2000 : $3 + 1900;
-    }
-    else
-    {
-        croak "Unable to parse date [$date].\n";
-    }
-
-    my $new_date = qq{$year:$month:$date};
-
-    return $new_date;
+    return qq{$year:$month:$day};
 }
 
 
@@ -226,6 +203,18 @@ sub _debug
     if ($opt->{debug})
     {
         print "DEBUG :: $_[0]";
+    }
+}
+
+
+#-------------------------------------------------------------------------------
+# Prints verbose messages.
+#-------------------------------------------------------------------------------
+sub _verbose
+{
+    if ($opt->{verbose})
+    {
+        print $_[0];
     }
 }
 
